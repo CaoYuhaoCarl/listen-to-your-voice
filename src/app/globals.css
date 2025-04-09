@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Shadowing Feature Styles */
+.toggle-checkbox:checked {
+  right: 0;
+  transform: translateX(50%);
+  border-color: #3b82f6;
+}
+
+.toggle-checkbox:checked + .toggle-label {
+  background-color: #3b82f6;
+}
+
+.toggle-label {
+  transition: background-color 0.2s ease;
+}
+
+.recording-indicator {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 15px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.score-bubble {
+  transition: all 0.3s ease;
+}
+
+.score-bubble:hover {
+  transform: scale(1.2);
+}
