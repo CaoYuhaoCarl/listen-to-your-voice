@@ -16,6 +16,7 @@ function MainComponent() {
   const [browserVoices, setBrowserVoices] = React.useState([]);
   const [selectedVoiceType, setSelectedVoiceType] = React.useState("browser");
   const [playbackMode, setPlaybackMode] = React.useState("sequential");
+  const [repeatCount, setRepeatCount] = React.useState(1);
   const [startFromIndex, setStartFromIndex] = React.useState(0);
   const [autoAdvance, setAutoAdvance] = React.useState(true);
   const [textFormat, setTextFormat] = React.useState("dialogue");
@@ -40,6 +41,7 @@ function MainComponent() {
       }
     }
   });
+  const [showInstructions, setShowInstructions] = React.useState(false);
 
   const audioRef = React.useRef(null);
   const currentAudioQueue = React.useRef([]);
@@ -452,43 +454,47 @@ function MainComponent() {
         setError(`Failed to play audio: ${playError.message}`);
       }
 
-      currentAudioQueue.current.shift();
-      console.log(`Queue items remaining: ${currentAudioQueue.current.length}`);
+      if (line.repeatsLeft && line.repeatsLeft > 1) {
+        line.repeatsLeft -= 1;
+        console.log(`Repeating line, ${line.repeatsLeft} repeats left`);
+      } else {
+        currentAudioQueue.current.shift();
+        console.log(`Queue items remaining: ${currentAudioQueue.current.length}`);
+      }
 
       if (currentAudioQueue.current.length > 0 && autoAdvance) {
         console.log("Auto advancing to next item in queue");
-        setTimeout(() => processAudioQueue(), 100);
+        setTimeout(() => processAudioQueue(), 300);
       } else if (playbackMode === "loop" && autoAdvance) {
-        if (currentAudioQueue.current.length === 0) {
-          console.log("Loop mode: restarting queue");
-          if (currentLine && currentLine.type === "selection") {
-            currentAudioQueue.current = [currentLine];
-          } else {
-            currentAudioQueue.current = [...parsedDialogue];
-          }
-          setTimeout(() => processAudioQueue(), 500);
+        console.log("Loop mode: restarting queue");
+        if (currentLine && currentLine.type === "selection") {
+          currentAudioQueue.current = [{
+            ...currentLine,
+            repeatsLeft: repeatCount
+          }];
+        } else {
+          currentAudioQueue.current = parsedDialogue.map(line => ({
+            ...line,
+            repeatsLeft: repeatCount
+          }));
         }
-      } else if (playbackMode === "single" && autoAdvance) {
-        const currentLineIndex = parsedDialogue.findIndex(
-          (l) => l === currentLine
-        );
-        if (currentLineIndex !== -1) {
-          console.log("Single mode: repeating current line");
-          currentAudioQueue.current = [parsedDialogue[currentLineIndex]];
-          setTimeout(() => processAudioQueue(), 500);
-        } else if (currentLine && currentLine.type === "selection") {
-          console.log("Single mode: repeating selected text");
-          currentAudioQueue.current = [currentLine];
+        setTimeout(() => processAudioQueue(), 500);
+      } else if (playbackMode === "repeat" && autoAdvance) {
+        if (currentLine) {
+          console.log(`Repeat mode: replaying current line (${repeatCount} times)`);
+          currentAudioQueue.current = [{
+            ...currentLine,
+            repeatsLeft: repeatCount
+          }];
           setTimeout(() => processAudioQueue(), 500);
         } else {
           setIsPlaying(false);
-          setCurrentLine(null);
         }
       } else {
         console.log("Playback complete");
         setIsPlaying(false);
         
-        if (playbackMode !== "single" && !shadowingEnabled) {
+        if (playbackMode !== "repeat" && !shadowingEnabled) {
           setCurrentLine(null);
         } else if (shadowingEnabled && currentLine) {
           console.log("Preparing for shadowing...");
@@ -522,10 +528,18 @@ function MainComponent() {
 
     const startIndex = Math.min(startFromIndex, parsedDialogue.length - 1);
 
-    if (playbackMode === "sequential" || playbackMode === "loop") {
+    if (playbackMode === "sequential") {
       currentAudioQueue.current = [...parsedDialogue.slice(startIndex)];
-    } else if (playbackMode === "single" && currentLine) {
-      currentAudioQueue.current = [currentLine];
+    } else if (playbackMode === "loop") {
+      currentAudioQueue.current = parsedDialogue.slice(startIndex).map(line => ({
+        ...line,
+        repeatsLeft: repeatCount
+      }));
+    } else if (playbackMode === "repeat" && currentLine) {
+      currentAudioQueue.current = [{
+        ...currentLine,
+        repeatsLeft: repeatCount
+      }];
     } else {
       currentAudioQueue.current = [parsedDialogue[startIndex]];
     }
@@ -545,7 +559,7 @@ function MainComponent() {
 
     currentAudioQueue.current = [];
     setIsPlaying(false);
-    if (playbackMode !== "single") {
+    if (playbackMode !== "repeat") {
       setCurrentLine(null);
     }
   };
@@ -569,7 +583,7 @@ function MainComponent() {
 
     setCurrentLine(line);
 
-    if (playbackMode === "sequential" || playbackMode === "loop") {
+    if (playbackMode === "sequential") {
       const lineIndex = parsedDialogue.findIndex((l) => l === line);
       if (lineIndex !== -1) {
         setStartFromIndex(lineIndex);
@@ -577,8 +591,25 @@ function MainComponent() {
       } else {
         currentAudioQueue.current = [line];
       }
+    } else if (playbackMode === "loop") {
+      const lineIndex = parsedDialogue.findIndex((l) => l === line);
+      if (lineIndex !== -1) {
+        setStartFromIndex(lineIndex);
+        currentAudioQueue.current = parsedDialogue.slice(lineIndex).map(line => ({
+          ...line,
+          repeatsLeft: repeatCount
+        }));
+      } else {
+        currentAudioQueue.current = [{
+          ...line,
+          repeatsLeft: repeatCount
+        }];
+      }
     } else {
-      currentAudioQueue.current = [line];
+      currentAudioQueue.current = [{
+        ...line,
+        repeatsLeft: repeatCount
+      }];
     }
 
     setIsPlaying(true);
@@ -659,30 +690,16 @@ function MainComponent() {
       const wasPlaying = isPlaying;
       const previousLine = currentLine;
       const previousQueue = [...currentAudioQueue.current];
-      const previousPlaybackMode = playbackMode;
 
       setCurrentLine(tempLine);
 
-      if (playbackMode === "loop") {
+      if (playbackMode === "loop" || playbackMode === "repeat") {
         setIsPlaying(true);
-        currentAudioQueue.current = [tempLine];
-
-        const processLoopQueue = async () => {
-          if (!isPlaying) return;
-
-          try {
-            await playAudio(tempLine);
-
-            if (isPlaying && playbackMode === "loop") {
-              setTimeout(() => processLoopQueue(), 300);
-            }
-          } catch (err) {
-            console.error("Error in loop playback:", err);
-            setError(`Loop playback error: ${err.message}`);
-          }
-        };
-
-        processLoopQueue();
+        currentAudioQueue.current = [{
+          ...tempLine,
+          repeatsLeft: repeatCount
+        }];
+        processAudioQueue();
       } else {
         setIsPlaying(true);
         currentAudioQueue.current = [tempLine];
@@ -726,17 +743,31 @@ function MainComponent() {
     }
   }, []);
 
+  // Add click outside handler for instructions popover
+  React.useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showInstructions && !event.target.closest('#instructions-popover') && !event.target.closest('#help-button')) {
+        setShowInstructions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showInstructions]);
+
   return (
     <div className="flex h-screen bg-gray-100 relative">
       {showPlaySelectedTextButton && (
         <div className="fixed bottom-4 right-4 z-50">
           <button
             onClick={playSelectedText}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center"
+            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center space-x-2 group transition-all"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5 mr-2"
+              className="h-5 w-5 group-hover:scale-110 transition-transform"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -754,8 +785,116 @@ function MainComponent() {
                 d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            Play Selected Text
+            <span>播放所选文本</span>
+            <span className="text-xs bg-white text-blue-600 px-2 py-0.5 rounded-full">
+              {selectedText.length > 20 ? selectedText.slice(0, 20) + '...' : selectedText}
+            </span>
           </button>
+        </div>
+      )}
+
+      {/* Help button - fixed in bottom left */}
+      <button
+        id="help-button"
+        onClick={() => setShowInstructions(!showInstructions)}
+        className="fixed bottom-4 left-4 z-50 bg-blue-500 hover:bg-blue-600 text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110"
+        aria-label="Help"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="h-6 w-6"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+      </button>
+
+      {/* Instructions popover */}
+      {showInstructions && (
+        <div
+          id="instructions-popover"
+          className="fixed bottom-20 left-4 z-50 max-w-md bg-white rounded-lg shadow-xl p-4 border border-gray-200"
+        >
+          <div className="p-3 bg-blue-50 rounded-lg">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-lg font-semibold mb-2">如何使用</h3>
+              <button 
+                onClick={() => setShowInstructions(false)}
+                className="text-gray-500 hover:text-gray-700 transition-colors"
+                aria-label="Close instructions"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <h4 className="text-sm font-semibold mb-1">支持的格式:</h4>
+              <div className="mb-2">
+                <p className="text-xs font-medium">1. 对话格式:</p>
+                <pre className="mt-1 p-2 bg-gray-100 rounded text-xs">
+                  {`Round 1:
+A: Hello, how are you today?
+B: I'm doing well, thank you for asking!`}
+                </pre>
+              </div>
+              <div className="mb-3">
+                <p className="text-xs font-medium">
+                  2. 普通文本格式 (以 #### 开头):
+                </p>
+                <pre className="mt-1 p-2 bg-gray-100 rounded text-xs">
+                  {`#### Title Here
+This is a paragraph that will be read.
+
+Another paragraph here.`}
+                </pre>
+              </div>
+            </div>
+            
+            <ol className="list-decimal list-inside space-y-1">
+              <li>上传文本文件或直接粘贴对话文本</li>
+              <li>程序会自动检测"角色: 对话"格式的角色</li>
+              <li>选择浏览器TTS（免费）或ElevenLabs（需要API）</li>
+              <li>为每个角色分配不同的语音</li>
+              <li>
+                选择您喜欢的播放模式:
+                <ul className="list-disc list-inside ml-4 mt-1">
+                  <li><strong>顺序播放:</strong> 从选定行开始连续播放到结尾</li>
+                  <li><strong>循环全部:</strong> 循环播放所有内容，每行重复设定次数</li>
+                  <li><strong>重复当前:</strong> 仅重复当前选中的行，可设置重复次数</li>
+                </ul>
+              </li>
+              <li>点击对话行可以直接播放该行，悬停时会显示播放控制</li>
+              <li>文本上下文选择可以快速播放选择的文本片段</li>
+              <li><strong>跟读功能:</strong> 播放完成后，可以进行跟读练习并获得发音评分</li>
+            </ol>
+            
+            <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-xs">
+              <p className="font-semibold">语音提供商选项:</p>
+              <ul className="list-disc list-inside mt-1">
+                <li><strong>Browser TTS:</strong> 免费，支持离线使用，但语音质量和多样性有限</li>
+                <li><strong>ElevenLabs:</strong> 高质量语音，但需要API密钥和可用额度</li>
+              </ul>
+            </div>
+            
+            <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-blue-800 text-xs">
+              <p className="font-semibold">播放模式使用提示:</p>
+              <ul className="list-disc list-inside mt-1">
+                <li><strong>语言学习:</strong> 使用"重复当前"模式并设置3-5次重复来加强记忆</li>
+                <li><strong>影子跟读:</strong> 使用"顺序播放"模式，让音频播放完后进行跟读</li>
+                <li><strong>脚本练习:</strong> 使用"循环全部"模式让整个对话循环播放</li>
+                <li><strong>难点突破:</strong> 选择文本中的难点片段，使用重复模式反复练习</li>
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
@@ -826,50 +965,23 @@ function MainComponent() {
           <label className="block text-sm font-medium mb-2">
             Or Paste Text Here
           </label>
-          <textarea
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-            }}
-            className="w-full p-2 border rounded h-40"
-            placeholder="Paste your text here..."
-          />
+          <div className="relative">
+            <textarea
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+              }}
+              className="w-full p-2 border rounded h-40"
+              placeholder="Paste your text here..."
+            />
+          </div>
           <div className="mt-2">
             <button
               onClick={handleUpdateDialogue}
-              className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded"
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
             >
-              Update
+              更新
             </button>
-            <span className="ml-2 text-sm text-gray-500">
-              Click to refresh after editing text
-            </span>
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold mb-2">Format Guide</h2>
-          <div className="p-3 bg-blue-50 rounded-lg text-sm">
-            <p className="font-semibold mb-1">Two supported formats:</p>
-            <div className="mb-2">
-              <p className="font-medium">1. Dialogue Format:</p>
-              <pre className="mt-1 p-2 bg-gray-100 rounded text-xs">
-                {`Round 1:
-A: Hello, how are you today?
-B: I'm doing well, thank you for asking!`}
-              </pre>
-            </div>
-            <div>
-              <p className="font-medium">
-                2. Plain Text Format (start with ####):
-              </p>
-              <pre className="mt-1 p-2 bg-gray-100 rounded text-xs">
-                {`#### Title Here
-This is a paragraph that will be read.
-
-Another paragraph here.`}
-              </pre>
-            </div>
           </div>
         </div>
 
@@ -957,11 +1069,11 @@ Another paragraph here.`}
         </div>
 
         <div className="mb-4">
-          <h2 className="text-lg font-semibold mb-2">Playback Settings</h2>
+          <h2 className="text-lg font-semibold mb-2">播放设置</h2>
 
           <div className="mb-3">
             <label className="block text-sm font-medium mb-2">
-              Playback Mode
+              播放模式
             </label>
             <div className="grid grid-cols-3 gap-2">
               <button
@@ -987,7 +1099,7 @@ Another paragraph here.`}
                       d="M5 15l7-7 7 7"
                     />
                   </svg>
-                  Sequential
+                  顺序播放
                 </div>
               </button>
               <button
@@ -1013,13 +1125,13 @@ Another paragraph here.`}
                       d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                     />
                   </svg>
-                  Loop
+                  循环全部
                 </div>
               </button>
               <button
-                onClick={() => setPlaybackMode("single")}
+                onClick={() => setPlaybackMode("repeat")}
                 className={`p-2 rounded text-sm ${
-                  playbackMode === "single"
+                  playbackMode === "repeat"
                     ? "bg-blue-500 text-white"
                     : "bg-gray-200 hover:bg-gray-300"
                 }`}
@@ -1039,7 +1151,7 @@ Another paragraph here.`}
                       d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
                     />
                   </svg>
-                  Single
+                  重复当前
                 </div>
               </button>
             </div>
@@ -1047,7 +1159,24 @@ Another paragraph here.`}
 
           <div className="mb-3">
             <label className="block text-sm font-medium mb-2">
-              Auto Advance
+              重复次数
+            </label>
+            <div className="flex items-center space-x-3">
+              <input
+                type="range"
+                min="1"
+                max="5"
+                value={repeatCount}
+                onChange={(e) => setRepeatCount(parseInt(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-sm text-gray-600 w-8">{repeatCount}次</span>
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <label className="block text-sm font-medium mb-2">
+              自动继续
             </label>
             <div className="flex items-center">
               <label className="inline-flex items-center mr-4">
@@ -1057,7 +1186,7 @@ Another paragraph here.`}
                   checked={autoAdvance}
                   onChange={() => setAutoAdvance(!autoAdvance)}
                 />
-                <span className="ml-2">Automatically play next line</span>
+                <span className="ml-2">自动播放下一行</span>
               </label>
             </div>
           </div>
@@ -1077,12 +1206,12 @@ Another paragraph here.`}
             } text-white`}
           >
             {isPlaying
-              ? "Playing..."
+              ? "播放中..."
               : playbackMode === "sequential"
-              ? "Play All"
+              ? "开始播放"
               : playbackMode === "loop"
-              ? "Loop All"
-              : "Play Selected"}
+              ? "循环播放"
+              : `重复播放${repeatCount}次`}
           </button>
 
           <button
@@ -1092,7 +1221,7 @@ Another paragraph here.`}
               !isPlaying ? "bg-gray-400" : "bg-red-500 hover:bg-red-600"
             } text-white`}
           >
-            Stop
+            停止
           </button>
 
           <div className="flex space-x-1 mb-2">
@@ -1156,59 +1285,6 @@ Another paragraph here.`}
           </div>
         )}
 
-        <div className="mt-6 p-3 bg-blue-50 rounded-lg">
-          <h3 className="text-md font-semibold mb-2">如何使用:</h3>
-          <ol className="list-decimal list-inside text-sm space-y-1">
-            <li>上传文本文件或直接粘贴对话文本</li>
-            <li>
-              程序会自动检测"角色: 对话"格式的角色
-            </li>
-            <li>
-              选择浏览器TTS（免费）或ElevenLabs（需要API）
-            </li>
-            <li>为每个角色分配不同的语音</li>
-            <li>
-              选择您喜欢的播放模式:
-              <ul className="list-disc list-inside ml-4 mt-1">
-                <li>
-                  <strong>顺序:</strong> 从选定行播放到结尾
-                </li>
-                <li>
-                  <strong>循环:</strong> 连续重复所有对话
-                </li>
-                <li>
-                  <strong>单行:</strong> 只播放选定的行
-                </li>
-              </ul>
-            </li>
-            <li>
-              点击"播放全部"听整个对话，或点击单独的行
-            </li>
-            <li>
-              <strong>跟读功能:</strong> 播放完成后，可以进行跟读练习并获得发音评分
-            </li>
-          </ol>
-          <p className="mt-2 text-sm">示例格式:</p>
-          <pre className="mt-1 p-2 bg-gray-100 rounded text-xs">
-            {`Round 1:
-A: 你好，今天天气真好。
-B: 是的，阳光明媚，很适合出去走走。`}
-          </pre>
-          <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-sm">
-            <p className="font-semibold">Voice Provider Options:</p>
-            <ul className="list-disc list-inside mt-1">
-              <li>
-                <strong>Browser TTS:</strong> Free, works offline, but limited
-                voice quality and variety
-              </li>
-              <li>
-                <strong>ElevenLabs:</strong> High-quality voices, but requires
-                an API key with available credits
-              </li>
-            </ul>
-          </div>
-        </div>
-
         {shadowingEnabled && shadowingScores.length > 0 && (
           <ShadowingStats scores={shadowingScores} />
         )}
@@ -1268,56 +1344,110 @@ B: 是的，阳光明媚，很适合出去走走。`}
 
         {parsedDialogue.length > 0 ? (
           <div className="space-y-4">
-            {parsedDialogue.map((item, index) => (
-              <div
-                id={`line-${index}`}
-                key={index}
-                className={`p-4 rounded-lg cursor-pointer transition-all duration-300 ${
-                  currentLine === item
-                    ? "bg-yellow-100 border-l-4 border-yellow-500 shadow-lg transform scale-105"
-                    : item.type === "heading"
-                    ? "bg-gray-50 hover:bg-gray-100"
-                    : item.type === "paragraph"
-                    ? "bg-blue-50/30 hover:bg-blue-50"
-                    : item.type === "narration"
-                    ? "bg-purple-50/30 hover:bg-purple-50"
-                    : index % 2 === 0
-                    ? "bg-blue-50/20 hover:bg-blue-50/50"
-                    : "bg-green-50/20 hover:bg-green-50/50"
-                }`}
-                onClick={() => playSingleLine(item)}
-              >
-                {item.type === "heading" ? (
-                  <h3 className="font-bold text-xl md:text-2xl break-words">
-                    {item.content}
-                  </h3>
-                ) : item.type === "paragraph" ? (
-                  <div>
-                    {item.heading && (
-                      <div className="text-sm text-gray-500 mb-2">
-                        {item.heading}
-                      </div>
-                    )}
-                    <div
-                      className={`text-lg md:text-xl break-words ${
-                        currentLine === item ? "font-medium" : ""
-                      }`}
-                    >
-                      {item.content}
+            {parsedDialogue.map((item, index) => {
+              // Get current repeat count for UI display if applicable
+              const isCurrentlyPlaying = currentLine === item && isPlaying;
+              const currentLineInQueue = currentAudioQueue.current.find(l => l === item);
+              const repeatsRemaining = currentLineInQueue?.repeatsLeft || 0;
+              
+              return (
+                <div
+                  id={`line-${index}`}
+                  key={index}
+                  className={`p-4 rounded-lg relative transition-all duration-300 ${
+                    currentLine === item
+                      ? "bg-yellow-100 border-l-4 border-yellow-500 shadow-lg transform scale-[1.02]"
+                      : item.type === "heading"
+                      ? "bg-gray-50 hover:bg-gray-100"
+                      : item.type === "paragraph"
+                      ? "bg-blue-50/30 hover:bg-blue-50"
+                      : item.type === "narration"
+                      ? "bg-purple-50/30 hover:bg-purple-50"
+                      : index % 2 === 0
+                      ? "bg-blue-50/20 hover:bg-blue-50/50"
+                      : "bg-green-50/20 hover:bg-green-50/50"
+                  }`}
+                >
+                  {/* Playback control overlay */}
+                  <div 
+                    className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/10 rounded-lg"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isPlaying && currentLine === item) {
+                        stopPlayback();
+                      } else {
+                        playSingleLine(item);
+                      }
+                    }}
+                  >
+                    <div className="flex gap-2">
+                      <button 
+                        className="bg-white/90 hover:bg-white p-2 rounded-full shadow-lg text-blue-600"
+                        aria-label={isCurrentlyPlaying ? "Stop" : "Play"}
+                      >
+                        {isCurrentlyPlaying ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        )}
+                      </button>
+                      
+                      {/* Loop this line button */}
+                      <button 
+                        className="bg-white/90 hover:bg-white p-2 rounded-full shadow-lg text-green-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPlaybackMode("repeat");
+                          playSingleLine(item);
+                        }}
+                        aria-label="Repeat this line"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
-                ) : (
-                  <>
-                    {item.round && (
-                      <div className="text-sm text-gray-500 mb-2">
-                        {item.round}
+                  
+                  {/* Status indicators - will show on active line */}
+                  {isCurrentlyPlaying && (
+                    <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+                      {/* Pulsing animation for currently playing */}
+                      <div className="flex items-center">
+                        <span className="relative flex h-3 w-3">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                        </span>
+                        <span className="ml-1 text-xs font-medium text-blue-800">播放中</span>
                       </div>
-                    )}
-                    {item.type === "dialogue" ? (
-                      <>
-                        <div className="font-semibold text-lg md:text-xl mb-1">
-                          {item.character}:
+                      
+                      {/* Repeat indicator if in repeat mode and count > 1 */}
+                      {playbackMode === "repeat" && repeatsRemaining > 1 && (
+                        <div className="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full">
+                          还有 {repeatsRemaining-1} 次
                         </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Content section */}
+                  <div className="cursor-pointer" onClick={() => playSingleLine(item)}>
+                    {item.type === "heading" ? (
+                      <h3 className="font-bold text-xl md:text-2xl break-words">
+                        {item.content}
+                      </h3>
+                    ) : item.type === "paragraph" ? (
+                      <div>
+                        {item.heading && (
+                          <div className="text-sm text-gray-500 mb-2">
+                            {item.heading}
+                          </div>
+                        )}
                         <div
                           className={`text-lg md:text-xl break-words ${
                             currentLine === item ? "font-medium" : ""
@@ -1325,20 +1455,38 @@ B: 是的，阳光明媚，很适合出去走走。`}
                         >
                           {item.content}
                         </div>
-                      </>
+                      </div>
                     ) : (
-                      <div
-                        className={`italic text-lg md:text-xl break-words ${
-                          currentLine === item ? "font-medium" : ""
-                        }`}
-                      >
-                        {item.content}
+                      <div>
+                        {item.round && (
+                          <div className="text-sm text-gray-500 mb-2">
+                            {item.round}
+                          </div>
+                        )}
+                        {item.type === "narration" ? (
+                          <div className="italic text-gray-600 text-lg md:text-xl break-words">
+                            {item.content}
+                          </div>
+                        ) : (
+                          <div>
+                            <span className="font-semibold text-lg md:text-xl text-blue-800">
+                              {item.character}:
+                            </span>{" "}
+                            <span
+                              className={`text-lg md:text-xl break-words ${
+                                currentLine === item ? "font-medium" : ""
+                              }`}
+                            >
+                              {item.content}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <p className="text-gray-500 text-center text-lg mt-10">

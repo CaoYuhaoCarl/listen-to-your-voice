@@ -51,10 +51,31 @@ const ShadowingFeature = ({ currentLine, isPlaying, onScoreUpdate }) => {
       const timer = setTimeout(() => {
         console.log('显示跟读提示');
         setVisualFeedback([{ id: Date.now(), text: '现在跟读!', type: 'prompt' }]);
+        
+        // Add pulsing effect to the start shadowing button
+        setIsAnimating(true);
       }, 500);
       return () => clearTimeout(timer);
     }
   }, [isPlaying, currentLine, isShadowing, showResults]);
+
+  // Reset animation state when shadowing starts
+  useEffect(() => {
+    if (isShadowing) {
+      setIsAnimating(false);
+    }
+  }, [isShadowing]);
+
+  // Handle any changes to current line to reset the shadowing state
+  useEffect(() => {
+    if (currentLine) {
+      // Only reset if we're showing results or currently shadowing
+      // This allows seamless repeat playback without disrupting the shadowing flow
+      if (showResults || isShadowing) {
+        resetShadowing();
+      }
+    }
+  }, [currentLine]);
 
   const resetShadowing = () => {
     console.log('重置跟读状态');
@@ -400,11 +421,14 @@ const ShadowingFeature = ({ currentLine, isPlaying, onScoreUpdate }) => {
               } shadow-lg mb-2 flex justify-center items-center space-x-2 relative overflow-hidden`}
               initial={{ boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)" }}
               animate={{ 
-                boxShadow: ["0 4px 6px rgba(0, 0, 0, 0.1)", "0 8px 15px rgba(59, 130, 246, 0.4)", "0 4px 6px rgba(0, 0, 0, 0.1)"],
+                boxShadow: isAnimating 
+                  ? ["0 4px 6px rgba(0, 0, 0, 0.1)", "0 8px 15px rgba(59, 130, 246, 0.5)", "0 4px 6px rgba(0, 0, 0, 0.1)"]
+                  : "0 4px 6px rgba(0, 0, 0, 0.1)",
+                scale: isAnimating ? [1, 1.05, 1] : 1
               }}
               transition={{ 
                 duration: 2, 
-                repeat: Infinity,
+                repeat: isAnimating ? Infinity : 0,
                 repeatType: "mirror"
               }}
             >
@@ -417,13 +441,13 @@ const ShadowingFeature = ({ currentLine, isPlaying, onScoreUpdate }) => {
                 className="absolute top-0 left-0 right-0 bottom-0 bg-white opacity-10"
                 initial={{ scale: 0, opacity: 0 }}
                 animate={{ 
-                  scale: [0, 1.5],
-                  opacity: [0.7, 0],
+                  scale: isAnimating ? [0, 1.5] : 0,
+                  opacity: isAnimating ? [0.7, 0] : 0,
                   borderRadius: ["20%", "50%"]
                 }}
                 transition={{ 
                   duration: 2,
-                  repeat: Infinity,
+                  repeat: isAnimating ? Infinity : 0,
                   repeatType: "loop"
                 }}
               />
